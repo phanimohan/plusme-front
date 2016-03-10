@@ -51,7 +51,7 @@ app.use('/logout', function (req, res) {
 app.use('/',posts);
 app.use(function (req, res) {
     if (!req.session.userSignedIn) {
-      res.redirect('/login');
+      //res.redirect('/login');
     }
     alt.bootstrap(JSON.stringify(res.locals.data || {}));
     var iso = new Iso();
