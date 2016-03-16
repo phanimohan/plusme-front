@@ -1,0 +1,199 @@
+<?php
+
+/**
+ * Implements hook_permission.
+ */
+function plusme_extras_permission() {
+  return array(
+    'administer plusme extras' => array(
+      'title' => t('Administer PlusME extras'),
+    )
+  );
+}
+
+/**
+ * Implements hook_menu.
+ */
+function plusme_extras_menu() {
+  $menu = array();
+
+  $menu['node/%/attendees'] = array(
+    'title' => 'Plan Attendees',
+    'description' => 'Attendees list for the plan.',
+    'page callback' => 'plusme_extras_attendees',
+    'page arguments' => array(1),
+    'access callback' => 'plusme_extras_user_access',
+    'access arguments' => array(1),
+    'type' => MENU_LOCAL_TASK,
+    'weight' => 5,
+  );
+
+  return $menu;
+}
+
+/**
+ * Performs user access check to plan node.
+ *
+ * @param $nid
+ *  node id of the content.
+ * @return boolean TRUE or FALSE.
+ */
+function plusme_extras_user_access($nid) {
+  global $user;
+  $node = node_load($nid);
+  if ($node->type != 'plan') {
+     return FALSE;
+  }
+
+  // Check if current user is author of the node.
+  if ($user->uid == $node->uid) {
+    return TRUE;
+  }
+
+  // Parsing list of users from the selected groups.
+  if (!empty($node->field_groups)) {
+    foreach ($node->field_groups[LANGUAGE_NONE] as $key => $value) {
+      $group = node_load($value['target_id']);
+
+      if (!empty($group->field_group_users)) {
+        foreach ($group->field_group_users[LANGUAGE_NONE] as $row => $group_user) {
+          if ($user->uid == $group_user['target_id']) {
+            return TRUE;
+          }
+        }
+      }
+    }
+  }
+
+  // Parsing from the friends list.
+  if (!empty($node->field_friends)) {
+    foreach ($node->field_friends[LANGUAGE_NONE] as $key => $value) {
+      if ($user->uid == $value['target_id']) {
+        return TRUE;
+      }
+    }
+  }
+
+  return FALSE;
+}
+
+/**
+ * Page callback to display list of attendees to a plan.
+ *
+ * @param $nid
+ *  node id of the content.
+ * @return $string.
+ *  Tabluar format with attendees list.
+ */
+function plusme_extras_attendees($nid) {
+  global $user;
+  $node = node_load($nid);
+  $attendees = array();
+
+  // Register plan author by default.
+  $attendees[] = $node->uid;
+
+  // Parsing list of users from the selected groups.
+  if (!empty($node->field_groups)) {
+    foreach ($node->field_groups[LANGUAGE_NONE] as $key => $value) {
+      $group = node_load($value['target_id']);
+
+      if (!empty($group->field_group_users)) {
+        foreach ($group->field_group_users[LANGUAGE_NONE] as $row => $group_user) {
+          if (!in_array($group_user['target_id'], $attendees)) {
+            $attendees[] = $group_user['target_id'];
+          }
+        }
+      }
+    }
+  }
+
+  // Parsing from the friends list.
+  if (!empty($node->field_friends)) {
+    foreach ($node->field_friends[LANGUAGE_NONE] as $key => $value) {
+      if (!in_array($value['target_id'], $attendees)) {
+        $attendees[] = $value['target_id'];
+      }
+    }
+  }
+
+  $table = array(
+    'header' => array(
+      array('data' => t('Friend'), 'width' => '50%'),
+      array('data' => t('Status'), 'width' => '25%'),
+      array('data' => t('Accepted')),
+    ),
+    'rows' => array());
+
+  foreach ($attendees as $attendee) {
+    $attendee_obj = user_load($attendee);
+    $plusme_status = 'No';
+    $timestamp = '--';
+    $query = db_select('votingapi_vote', 'v')
+      ->fields('v', array('uid', 'value', 'timestamp'));
+    $query->condition('v.entity_id', $node->nid);
+    $query->condition('v.uid', $attendee);
+
+    $results = $query->execute();
+    foreach ($results as $row) {
+      $plusme_status = 'Yes';
+      $timestamp = format_date($row->timestamp);
+    }
+
+    $table['rows'][] = array(
+      $attendee_obj->field_full_name[LANGUAGE_NONE][0]['value'],
+      $plusme_status,
+      $timestamp,
+    );
+  }
+  return theme('table', $table);
+}
+
+/**
+ * Implements hook_theme_registry_alter.
+ */
+function plusme_extras_theme_registry_alter(&$theme_registry) {
+  $theme_registry['plus1_widget']['preprocess functions'][] = 'plume_extras_plus1_widget_preprocess';
+}
+
+/**
+ * Page callback to update plus1 widget message.
+ *
+ * @param $variables
+ *  Theme registry variables.
+ */
+function plume_extras_plus1_widget_preprocess(&$variables) {
+  $entity_type = $variables['entity_type'];
+  $entity_id = $variables['entity_id'];
+
+  if (!plusme_extras_user_access($entity_id)) {
+    $variables['widget_message'] =  l('Home', '/', array('html' => TRUE, 'attributes' => array('class' => array('hidden'))));
+  }
+}
+
+/**
+ * Implements hook_node_insert().
+ */
+function plusme_extras_node_insert($node) {
+  global $user;
+  if (module_exists('plus1')) {
+    $tag = 'plus1_node_vote';
+    $voted = plus1_get_votes('node', $node->nid, $user->uid, $tag);
+
+    $vote_source = $user->uid;
+    drupal_alter('plus1_source', $vote_source);
+
+    // If the voter has not already voted.
+    if (!$voted) {
+      $votes[] = array(
+        'entity_type' => 'node',
+        'entity_id' => $node->nid,
+        'value_type' => 'points',
+        'value' => 1,
+        'tag' => $tag,
+        'vote_source' => $vote_source,
+      );
+      votingapi_set_votes($votes);
+    }
+  }
+}
